@@ -1,0 +1,13 @@
+# data and artefacts of the competition run
+train/
+val/
+test/
+sub/
+*.pth
+*.npy
+submission.zip
+
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+.DS_Store

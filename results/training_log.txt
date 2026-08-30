@@ -1,0 +1,49 @@
+Contest run, 29-30 Nov 2025, single GPU. Verbatim stdout of the final notebook run.
+The last run trains on train+val, so the val numbers below track progress only.
+
+Using device: cuda
+train len: 4000 val len: 1000 train+val len: 5000
+cam_orig_sizes: [(546, 1024), (568, 1024), (540, 1024), (540, 1024)]
+pos_count: 381269 neg_count: 456110
+estimated pos_weight: 1.1962944797505173
+images shape: torch.Size([8, 4, 3, 320, 640])
+logits shape: torch.Size([8, 1, 188, 126])
+Epoch 01: train_loss=0.7699, train_IoU=0.5417, val_loss=0.7031, val_IoU=0.5982
+  -> new best val IoU: 0.5982, saved to lss_occupancy_final.pth
+Epoch 02: train_loss=0.7018, train_IoU=0.5900, val_loss=0.6655, val_IoU=0.6227
+  -> new best val IoU: 0.6227, saved to lss_occupancy_final.pth
+Epoch 03: train_loss=0.6594, train_IoU=0.6194, val_loss=0.6105, val_IoU=0.6525
+  -> new best val IoU: 0.6525, saved to lss_occupancy_final.pth
+Epoch 04: train_loss=0.6156, train_IoU=0.6478, val_loss=0.5565, val_IoU=0.6847
+  -> new best val IoU: 0.6847, saved to lss_occupancy_final.pth
+Epoch 05: train_loss=0.5871, train_IoU=0.6648, val_loss=0.5324, val_IoU=0.6936
+  -> new best val IoU: 0.6936, saved to lss_occupancy_final.pth
+Epoch 06: train_loss=0.5569, train_IoU=0.6828, val_loss=0.4951, val_IoU=0.7206
+  -> new best val IoU: 0.7206, saved to lss_occupancy_final.pth
+Epoch 07: train_loss=0.5372, train_IoU=0.6947, val_loss=0.4789, val_IoU=0.7293
+  -> new best val IoU: 0.7293, saved to lss_occupancy_final.pth
+Epoch 08: train_loss=0.5116, train_IoU=0.7098, val_loss=0.4560, val_IoU=0.7418
+  -> new best val IoU: 0.7418, saved to lss_occupancy_final.pth
+Epoch 09: train_loss=0.4958, train_IoU=0.7184, val_loss=0.4484, val_IoU=0.7465
+  -> new best val IoU: 0.7465, saved to lss_occupancy_final.pth
+Epoch 10: train_loss=0.4790, train_IoU=0.7276, val_loss=0.4202, val_IoU=0.7613
+  -> new best val IoU: 0.7613, saved to lss_occupancy_final.pth
+thr=0.35: IoU_1=0.7451, IoU_0=0.7622, mIoU=0.7536, frac_pos=0.5144
+thr=0.40: IoU_1=0.7489, IoU_0=0.7736, mIoU=0.7612, frac_pos=0.4953
+thr=0.45: IoU_1=0.7504, IoU_0=0.7820, mIoU=0.7662, frac_pos=0.4775
+thr=0.50: IoU_1=0.7497, IoU_0=0.7880, mIoU=0.7688, frac_pos=0.4607
+thr=0.55: IoU_1=0.7464, IoU_0=0.7917, mIoU=0.7691, frac_pos=0.4434
+thr=0.45: mIoU=0.7662, IoU0=0.7820, IoU1=0.7504
+thr=0.50: mIoU=0.7688, IoU0=0.7880, IoU1=0.7497
+thr=0.55: mIoU=0.7691, IoU0=0.7917, IoU1=0.7464
+thr=0.60: mIoU=0.7670, IoU0=0.7935, IoU1=0.7405
+thr=0.65: mIoU=0.7618, IoU0=0.7927, IoU1=0.7308
+BEST: thr=0.550, mIoU=0.7691
+100%|██████████| 2000/2000 [01:41<00:00, 19.73it/s]
+Inference on test done.
+submission.zip готов
+info exists: True
+predicted_static_grids exists: True
+rows in info: 2000
+npy files: 2000
+sample npy shape: (1, 188, 126) dtype: int32
