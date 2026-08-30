@@ -1,209 +1,186 @@
-# Occupancy grid в bird's-eye view по четырём камерам
+# Occupancy grid in bird's-eye view from four cameras
 
-Решение финала **AIDAO 2025** — Международной олимпиады по искусственному интеллекту и анализу
-данных (Яндекс Образование × ФКН НИУ ВШЭ). Задачу ставила команда беспилотных технологий Яндекса.
-32 часа, очно, НИУ ВШЭ на Покровском бульваре, 29–30 ноября 2025.
+Final-round solution for **AIDAO 2025**, the AI and Data Analysis Olympiad run by Yandex Education
+and the HSE Faculty of Computer Science. The task was set by Yandex's self-driving team. 32 hours
+on site at HSE, Pokrovsky Boulevard, Moscow, 29–30 November 2025.
 
-**Результат — IoU 0.5606 на закрытом тесте.** Для калибровки: у команды-победителя олимпиады 0.564.
+**Result: IoU 0.5606 on the private test set.** For calibration, the winning team scored 0.564.
 
-Архитектура — [Lift-Splat-Shoot](https://arxiv.org/abs/2008.05711), написанная с нуля на PyTorch.
-Готовых BEV-фреймворков в решении нет.
-
----
-
-## Задача
-
-Машина едет по городу и трассе. На ней четыре камеры: две смотрят вперёд (широкая и длиннофокусная),
-две — вбок. Нужно по одному кадру со всех четырёх восстановить, **что вокруг машины занято**, —
-карту сверху размером 188×126 клеток на область 150 м вперёд и 100 м поперёк, примерно 0.8 м на клетку.
-
-Разметка трёхзначная: свободно, занято, **неизвестно**. Неизвестные клетки не штрафуются — метрика и
-лосс их маскируют. Метрика — средний IoU по двум классам.
-
-К каждому кадру приложены калибровки всех камер: матрица внутренних параметров и матрица
-перехода `car_to_cam`.
+The architecture is [Lift-Splat-Shoot](https://arxiv.org/abs/2008.05711), written from scratch in
+PyTorch. No off-the-shelf BEV framework is used anywhere in the solution.
 
 ---
 
-## Идея решения
+## The task
+
+A car drives through city and highway scenes. It carries four cameras, two facing forward (a wide
+one and a long-focus one) and two facing sideways. From a single frame of all four, reconstruct
+**what is occupied around the car** as a top-down map of 188×126 cells covering 150 m ahead and
+100 m across, roughly 0.8 m per cell.
+
+Labels are three-valued: free, occupied, and **unknown**. Unknown cells carry no penalty, and both
+the metric and the loss mask them out. The score is a mean IoU over the two real classes.
+
+Every frame ships with the calibration of all four cameras, an intrinsics matrix and a `car_to_cam`
+transform.
+
+---
+
+## The idea
 
 ```mermaid
 flowchart TD
-    A["4 камеры · 320×640"] --> B["ResNet-50 + FPN<br/>один бэкбон на все камеры"]
-    B --> D["признаки<br/>40×80×64"]
-    B --> C["depth-head<br/>64 бина глубины"]
-    D --> E["lift<br/>признак × P(глубина)"]
+    A["4 cameras · 320×640"] --> B["ResNet-50 + FPN<br/>one backbone for all cameras"]
+    B --> D["features<br/>40×80×64"]
+    B --> C["depth head<br/>64 depth bins"]
+    D --> E["lift<br/>feature × P(depth)"]
     C --> E
-    E --> F["splat в BEV<br/>по калибровке этого кадра"]
-    F --> G["фьюжн 4 камер<br/>max + mean → SE"]
-    G --> H["dilated-декодер"]
-    H --> I["логиты занятости<br/>188×126"]
+    E --> F["splat into BEV<br/>using this frame's calibration"]
+    F --> G["fuse 4 cameras<br/>max + mean → SE"]
+    G --> H["dilated decoder"]
+    H --> I["occupancy logits<br/>188×126"]
 ```
 
-Каждый пиксель признаковой карты — это луч в пространстве. Модель не знает, на каком расстоянии
-вдоль луча находится объект, поэтому предсказывает **распределение по 64 бинам глубины** и
-размазывает признак вдоль луча пропорционально вероятности. Точки, попавшие в одну клетку BEV,
-складываются (`index_add_`). Всё дифференцируемо, никакой явной супервизии по глубине нет — она
-выучивается из одного только occupancy-таргета.
+Every pixel of the feature map is a ray in space. The model does not know how far along that ray
+an object sits, so it predicts a **distribution over 64 depth bins** and smears the feature along
+the ray in proportion to that probability. Points that land in the same BEV cell are summed
+(`index_add_`). The whole path is differentiable, and there is no explicit depth supervision
+anywhere. Depth is learned from the occupancy target alone.
 
 ---
 
-## Что дало прирост
+## What moved the score
 
-### 1. Покадровая калибровка (главное)
+### 1. Per-frame calibration (the big one)
 
-Базовый способ реализовать LSS — посчитать геометрию проекции один раз и переиспользовать. Так и
-было в первой версии, и это стоило качества: калибровка в датасете **меняется от кадра к кадру**.
+The straightforward way to implement LSS is to compute the projection geometry once and reuse it.
+That is what the first version did, and it cost accuracy, because calibration in this dataset
+**changes from frame to frame**.
 
-В финальной версии геометрия пересчитывается внутри `forward` для каждого сэмпла из его собственных
-`intrinsics` и `car_to_cam`. Отсюда и название ноутбука.
+In the final version the geometry is recomputed inside `forward` for every sample, from that
+sample's own `intrinsics` and `car_to_cam`. Hence the name of the notebook.
 
-Вторая половина той же проблемы, менее очевидная: изображения перед бэкбоном ресайзятся до 320×640,
-а `intrinsics` описывают **исходный** кадр. Причём у четырёх камер исходные разрешения разные —
-546, 568, 540 и 540 строк при ширине 1024. Если не вернуть сетку пикселей в координаты исходного
-изображения перед умножением на `K⁻¹`, лучи уходят мимо, и картинка в BEV разъезжается тем сильнее,
-чем дальше объект. Поэтому датасет отдаёт `orig_hw` вместе с картинками, а модель делит координаты
-на масштаб ресайза.
+The second half of the same problem is less obvious. Images are resized to 320×640 before the
+backbone, while the intrinsics describe the **original** frame. On top of that, the four cameras
+have different native resolutions: 546, 568, 540 and 540 rows at a width of 1024. Without mapping
+the pixel grid back into original image coordinates before multiplying by `K⁻¹`, the rays go off
+target, and the BEV picture smears more the further away an object is. That is why the dataset
+returns `orig_hw` alongside the images and the model divides coordinates by the resize scale.
 
-### 2. Лосс, оптимизирующий целевую метрику
+### 2. A loss that optimises the target metric
 
 ```
 loss = BCE(pos_weight ≈ 1.196) + 0.3 · (1 − soft_mIoU)
 ```
 
-`soft_mIoU` — дифференцируемый суррогат метрики: те же IoU по двум классам, но по вероятностям
-вместо порога, с той же маской неизвестных клеток. Одна BCE оптимизирует не то, по чему считается
-скор; одна soft-IoU хуже сходится в начале. Вместе — стабильнее и ближе к метрике.
+`soft_mIoU` is a differentiable surrogate for the metric, the same two-class IoU computed on
+probabilities instead of thresholded predictions, with the same mask over unknown cells. BCE alone
+optimises something other than the score. Soft IoU alone converges poorly early on. Together they
+are stable and stay close to the metric.
 
-`pos_weight` не подобран на глаз, а посчитан по фактическому балансу классов на 50 батчах:
-381 269 занятых клеток против 456 110 свободных.
+`pos_weight` is measured rather than guessed, from the actual class balance over 50 batches:
+381,269 occupied cells against 456,110 free ones.
 
-### 3. Обучаемая температура softmax в depth-head
+### 3. A learned softmax temperature in the depth head
 
-Температура распределения по глубине — параметр модели, зажатый в `[0.3, 3.0]`. В начале обучения
-модели выгодно размазывать массу по бинам, ближе к концу — заострять. Ручной подбор этого шага
-съел бы время, которого на 32-часовом финале нет.
+The temperature of the depth distribution is a model parameter clamped to `[0.3, 3.0]`. Early in
+training the model benefits from spreading mass across bins, and later from sharpening it. Tuning
+that schedule by hand would have eaten time a 32 hour final does not have.
 
-### 4. Калибровка порога
+### 4. Threshold calibration
 
-Порог бинаризации лосс не видит вовсе, и 0.5 не обязан быть оптимумом. Свип по валидации:
+The loss never sees the decision threshold, and 0.5 has no reason to be optimal. Sweeping it on
+validation:
 
-| порог | mIoU | IoU свободно | IoU занято |
-|-------|------|--------------|------------|
+| threshold | mIoU | IoU free | IoU occupied |
+|-----------|------|----------|--------------|
 | 0.45 | 0.7662 | 0.7820 | 0.7504 |
 | 0.50 | 0.7688 | 0.7880 | 0.7497 |
 | **0.55** | **0.7691** | 0.7917 | 0.7464 |
 | 0.60 | 0.7670 | 0.7935 | 0.7405 |
 | 0.65 | 0.7618 | 0.7927 | 0.7308 |
 
-Выигрыш маленький, но важнее то, что кривая **плоская** вокруг оптимума: значит, это не подгонка
-под шум, и на закрытом тесте порог не развалится.
+The gain is small, and the more useful observation is that the curve is **flat** around the
+optimum. That means the choice is not fitting noise and the threshold will not fall apart on the
+hidden test set.
 
 ---
 
-## Архитектура
+## Architecture
 
-| Блок | Что делает |
-|------|-----------|
-| `ResNet50Backbone` | ImageNet-ResNet-50 до `layer3`, FPN-слияние уровней /8 и /16. Общий на все камеры — в четыре раза меньше параметров и одинаковые признаки у всех видов |
-| `DepthHead` | Residual-блок + проекция 1×1 в 64 канала глубины, softmax с обучаемой температурой |
-| `_compute_bev_indices_for_cam` | Геометрия: `K⁻¹` → лучи → 64 бина глубины → `cam→car` → отсечение по высоте `Z ∈ [−1, 3]` → индекс клетки BEV |
-| `lift_splat_single_cam` | Взвешивание признаков вероятностью глубины и `index_add_` в сетку |
-| Фьюжн камер | `max` + `mean` по камерам, конкатенация, conv-BN-ReLU, SE-блок. `max` берёт самую уверенную камеру, `mean` — согласие между ними |
-| BEV-контекст | Два residual-блока с dilation 2 и 4 — рецептивное поле на всю сетку без потери разрешения |
-| Декодер | Residual-блоки + dropout → один канал логитов |
+| Block | What it does |
+|-------|--------------|
+| `ResNet50Backbone` | ImageNet ResNet-50 truncated at `layer3`, FPN merge of the /8 and /16 levels. Shared across cameras, which means four times fewer parameters and consistent features across views |
+| `DepthHead` | Residual block plus a 1×1 projection into 64 depth channels, softmax with a learned temperature |
+| `_compute_bev_indices_for_cam` | Geometry. `K⁻¹` to rays, 64 depth bins, `cam→car`, height gate `Z ∈ [−1, 3]`, then a flat BEV cell index |
+| `lift_splat_single_cam` | Weights features by depth probability and scatters them with `index_add_` |
+| Camera fusion | `max` and `mean` across cameras, concatenated, conv-BN-ReLU, then an SE block. Max keeps the most confident camera, mean keeps the agreement between them |
+| BEV context | Two residual blocks with dilation 2 and 4, giving a receptive field over the whole grid without losing resolution |
+| Decoder | Residual blocks and dropout into a single logit channel |
 
-Обучение: AdamW с раздельными lr (бэкбон 1e-4, головы 5e-4, предобученному нужен меньший шаг),
-cosine annealing, mixed precision, фотометрические аугментации на GPU, 10 эпох, батч 8.
-Инференс — 2000 кадров за 1 мин 41 с, около 20 кадров в секунду на одной GPU.
+Training used AdamW with separate learning rates (1e-4 for the backbone, 5e-4 for the heads, since
+a pretrained backbone wants smaller steps), cosine annealing, mixed precision, photometric
+augmentation on GPU, 10 epochs, batch size 8. Inference runs 2000 frames in 1 minute 41 seconds,
+about 20 frames per second on a single GPU.
 
-Полный лог прогона: [`results/training_log.txt`](results/training_log.txt).
-
----
-
-## Честные оговорки
-
-- **Числа валидации в логе не являются чистой валидацией.** Финальный прогон обучался на
-  `train + val`, а `val` остался в цикле только как индикатор прогресса. Единственная честная
-  цифра здесь — 0.5606 на закрытом тесте.
-- **Данных в репозитории нет.** Датасет олимпиады не публиковался, выложить его я не могу.
-  Ноутбук — это код решения, а не воспроизводимый с нуля пайплайн.
-- **Веса не приложены** (39 МБ). Могу выслать по запросу.
-- Олимпиада командная, три человека. Здесь — код финального решения.
-
-## Что стоило бы сделать иначе
-
-Что не влезло в 32 часа и куда я бы пошёл дальше:
-
-- **Свой цикл вместо `index_add_` по батчу.** Splat сейчас идёт питоновским циклом по элементам
-  батча — это узкое место инференса. Векторизация через сегментную сумму дала бы ускорение без
-  изменения результата.
-- **Временной контекст.** Задача решается по одному кадру, хотя данные — это записи поездок.
-  Агрегация нескольких кадров с учётом эго-движения — самый очевидный источник качества.
-- **Честный holdout.** Тренировка на `train + val` дала прирост, но лишила возможности мерить.
-  На длинной дистанции это плохой размен.
-- **Аугментации в BEV, а не только фотометрические.** Отражение по поперечной оси с
-  соответствующим преобразованием калибровки — дешёвое удвоение данных.
+Full run log: [`results/training_log.txt`](results/training_log.txt).
 
 ---
 
-## Как запустить
+## Honest caveats
+
+- **The validation numbers in the log are not a clean validation.** The final run trains on
+  `train + val`, and `val` stays in the loop purely as a progress signal. The only honest number
+  here is 0.5606 on the private test set.
+- **The data is not in this repository.** The competition dataset was never published, so I cannot
+  share it. The notebook is the solution code rather than a pipeline reproducible from scratch.
+- **Weights are not attached** (39 MB). Available on request.
+- The olympiad is a team event with three people. This is the code of the final solution.
+
+## What I would do differently
+
+Things that did not fit into 32 hours, and where I would go next.
+
+- **Replace the per-sample loop around `index_add_`.** The splat currently iterates over the batch
+  in Python, which is the bottleneck at inference. A segment-sum formulation would speed it up
+  without changing the result.
+- **Use temporal context.** The task is solved frame by frame even though the data comes from
+  driving sessions. Aggregating several frames with ego-motion is the most obvious source of
+  accuracy left on the table.
+- **Keep an honest holdout.** Training on `train + val` helped the score and removed any ability to
+  measure. Over a longer horizon that is a bad trade.
+- **Augment in BEV, not only photometrically.** A lateral flip with the matching transform of the
+  calibration is a cheap way to double the data.
+
+---
+
+## Running it
 
 ```bash
 pip install -r requirements.txt
 jupyter lab notebooks/lss_bev_occupancy.ipynb
 ```
 
-Ноутбук ждёт рядом каталоги `train/`, `val/`, `test/`, в каждом — `info.csv` со ссылками на
-изображения, `.npy`-калибровки и occupancy-сетки. Пути к данным задаются в первой ячейке
-(`DATA_ROOT`), веса ResNet-50 подтягиваются из torchvision, если не указать локальный файл.
+The notebook expects `train/`, `val/` and `test/` directories next to it, each with an `info.csv`
+pointing at images, `.npy` calibration files and occupancy grids. Data paths live in the first cell
+(`DATA_ROOT`). ResNet-50 weights are pulled from torchvision unless a local file is given.
 
-## Структура
+## Layout
 
 ```
-notebooks/lss_bev_occupancy.ipynb   решение целиком: датасет, геометрия, модель, обучение, сабмит
-results/training_log.txt            stdout финального прогона на олимпиаде
+notebooks/lss_bev_occupancy.ipynb   the whole solution: dataset, geometry, model, training, submission
+results/training_log.txt            stdout of the final contest run
 requirements.txt
 ```
 
 ---
 
-## Про олимпиаду
+## About the olympiad
 
-AIDAO — командная олимпиада (2–3 человека) от Яндекс Образования и факультета компьютерных наук
-НИУ ВШЭ, проводится с 2018 года (до 2023 — под названием IDAO). Рабочий язык английский, участники —
-студенты со всего мира.
+AIDAO is a team olympiad (two to three people) run by Yandex Education and the HSE Faculty of
+Computer Science, held since 2018 and known as IDAO until 2023. The working language is English
+and participants are students from around the world.
 
-В 2025 году: 248 команд из 14 стран, отборочный этап онлайн в Яндекс Контесте (задача про
-исправление ошибок в квантовом распределении ключей от лаборатории LAMBDA ФКН и компании QRate),
-30 команд в очном финале в Москве. Финальная задача — эта.
-
----
-
-<details>
-<summary><b>English summary</b></summary>
-
-Final-round solution for **AIDAO 2025** (AI and Data Analysis Olympiad, Yandex Education × HSE
-Faculty of Computer Science). The task, set by Yandex's self-driving team, was to reconstruct a
-static occupancy grid in bird's-eye view from four calibrated onboard cameras — a 188×126 grid
-covering 150 m × 100 m, scored by mean IoU over `{free, occupied}` with an ignore label.
-32 hours, on site at HSE Moscow, 29–30 November 2025.
-
-**Result: IoU 0.5606 on the private test set** (the winning team scored 0.564).
-
-Lift-Splat-Shoot implemented from scratch in PyTorch: a shared ResNet-50/FPN backbone, a
-categorical depth head with a learned softmax temperature, a differentiable splat into the BEV
-grid, max+mean camera fusion with squeeze-and-excitation, and a dilated residual decoder.
-
-The main source of improvement was recomputing the projection geometry **per frame** from that
-frame's intrinsics and `car_to_cam` — the calibration varies between frames, and the four cameras
-have different native resolutions, so the feature grid has to be mapped back to original image
-coordinates before rays are cast. Secondary gains came from training against a differentiable
-mean-IoU surrogate alongside class-weighted BCE, and from calibrating the decision threshold on a
-sweep rather than assuming 0.5.
-
-Note that the final run trains on `train + val`, so the validation numbers in the log track
-progress only; the private test score is the one honest number. The competition dataset was never
-published and is not included here.
-
-</details>
+In 2025 there were 248 teams from 14 countries. The online qualifier ran on Yandex Contest with a
+problem on error correction in quantum key distribution, set by the LAMBDA lab at HSE and the
+company QRate. Thirty teams reached the on-site final in Moscow, where this task was set.
