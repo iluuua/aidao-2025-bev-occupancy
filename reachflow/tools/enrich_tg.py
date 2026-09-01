@@ -9,7 +9,7 @@
   t.me/s/<h>  -> last_post_date, posts_7d, posts_30d  (работает только для каналов;
                  у групп публичной ленты нет — там эти поля остаются null)
 """
-import json, re, subprocess, sys, html
+import json, os, re, subprocess, sys, html
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
@@ -73,15 +73,23 @@ def enrich(handle):
     return rec
 
 def main():
+    # третий аргумент (необязательный) — файл с прошлым результатом:
+    # уже проверенные хэндлы берутся из него, заново тянутся только новые
+    cache = {}
+    if len(sys.argv) > 3 and os.path.exists(sys.argv[3]):
+        for r in json.load(open(sys.argv[3], encoding="utf-8")):
+            cache[r["handle"].lower()] = r
     raw = open(sys.argv[1], encoding="utf-8").read().strip()
     if raw.startswith("["):
         handles = [r.get("handle") or r.get("url") for r in json.loads(raw)]
     else:
         handles = [l for l in raw.splitlines() if l.strip()]
     handles = sorted({norm(x) for x in handles if norm(x) and re.fullmatch(r"[A-Za-z0-9_]{4,64}|\+[\w-]{8,64}|addlist/[\w-]{4,64}", norm(x))})
-    sys.stderr.write(f"enriching {len(handles)} handles\n")
+    fresh = [h for h in handles if h.lower() not in cache]
+    sys.stderr.write(f"всего {len(handles)}, из кэша {len(handles) - len(fresh)}, тянем {len(fresh)}\n")
     with ThreadPoolExecutor(max_workers=16) as ex:
-        out = list(ex.map(enrich, handles))
+        out = list(ex.map(enrich, fresh))
+    out += [cache[h.lower()] for h in handles if h.lower() in cache]
     json.dump(out, open(sys.argv[2], "w"), ensure_ascii=False, indent=1)
     live = sum(1 for r in out if r["status"].startswith("LIVE"))
     sys.stderr.write(f"live={live} dead={len(out)-live}\n")
