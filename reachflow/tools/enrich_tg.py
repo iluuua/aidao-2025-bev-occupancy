@@ -80,7 +80,7 @@ def main():
         handles = [l for l in raw.splitlines() if l.strip()]
     handles = sorted({norm(x) for x in handles if norm(x) and re.fullmatch(r"[A-Za-z0-9_]{4,64}|\+[\w-]{8,64}|addlist/[\w-]{4,64}", norm(x))})
     sys.stderr.write(f"enriching {len(handles)} handles\n")
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         out = list(ex.map(enrich, handles))
     json.dump(out, open(sys.argv[2], "w"), ensure_ascii=False, indent=1)
     live = sum(1 for r in out if r["status"].startswith("LIVE"))

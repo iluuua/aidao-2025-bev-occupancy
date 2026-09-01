@@ -57,16 +57,41 @@ for r in rows:
         best[k] = r
 rows = list(best.values())
 
-live = [r for r in rows if str(r["status"]).startswith("LIVE")]
-dead = [r for r in rows if not str(r["status"]).startswith("LIVE")]
-live.sort(key=lambda r: (r["segment"], r["use_case"], -(r["size"] or 0) if isinstance(r["size"], int) else 0))
+def band(r):
+    """Полоса по ПУБЛИЧНЫМ метаданным. Это прокси, а не ORDER_SCORE/PILOT_SCORE:
+    настоящие сигналы спроса и боли видны только внутри чата."""
+    size = r["size"] if isinstance(r["size"], int) else 0
+    if r["kind"] == "CHANNEL":
+        p30 = r["posts_30d"] if isinstance(r["posts_30d"], int) else None
+        if p30 == 0:
+            return "C"
+        if p30 is not None and p30 >= 4 and size >= 1000:
+            return "A"
+        return "B"
+    if r["kind"] == "GROUP":
+        if size >= 1000:
+            return "A"
+        if size >= 200:
+            return "B"
+        return "C"
+    return "B"
 
-fields = ["handle","url","title","kind","size","status","segment","subsegment","use_case",
+for r in rows:
+    r["band"] = band(r) if str(r["status"]).startswith("LIVE") else ""
+
+folders = [r for r in rows if r["handle"].startswith("addlist/")]
+live = [r for r in rows if str(r["status"]).startswith("LIVE") and not r["handle"].startswith("addlist/")]
+dead = [r for r in rows if not str(r["status"]).startswith("LIVE")]
+BAND_ORDER = {"A": 0, "B": 1, "C": 2, "": 3}
+live.sort(key=lambda r: (r["segment"], r["use_case"], BAND_ORDER[r["band"]],
+                         -(r["size"] if isinstance(r["size"], int) else 0)))
+
+fields = ["handle","url","title","kind","size","status","band","segment","subsegment","use_case",
           "last_post_date","posts_30d","confidence","why","source"]
 with open(out_csv, "w", newline="", encoding="utf-8") as fh:
     w = csv.DictWriter(fh, fieldnames=fields)
     w.writeheader()
-    for r in live + dead:
+    for r in live + folders + dead:
         w.writerow(r)
 
 by_seg = defaultdict(lambda: defaultdict(list))
@@ -79,6 +104,9 @@ L.append(f"Всего проверено ссылок: **{len(rows)}**. Живы
          f"мёртвых или приватных: **{len(dead)}**.\n")
 L.append("Числа участников и даты постов сняты с публичных страниц t.me скриптом `tools/verify_tg.sh` / `tools/enrich_tg.py`. "
          "У групп публичной ленты нет, поэтому `последний пост` заполнен только у каналов.\n")
+L.append("**Полоса A/B/C здесь — прокси по публичным метаданным** (размер, свежесть постов), а не `ORDER_SCORE`/`PILOT_SCORE` "
+         "из `playbook/scoring.md`: настоящие сигналы спроса и боли видны только внутри чата, после вступления. "
+         "C у канала означает «ни одного поста за 30 дней», C у группы — меньше 200 участников.\n")
 for seg in ["it_orders", "infobiz", "leadgen", "business"]:
     if seg not in by_seg:
         continue
@@ -88,12 +116,21 @@ for seg in ["it_orders", "infobiz", "leadgen", "business"]:
         if not items:
             continue
         L.append(f"\n### {USE_TITLE.get(use, use)} ({len(items)})\n")
-        L.append("| Ресурс | Тип | Участников | Последний пост | Зачем нам |")
-        L.append("|---|---|---:|---|---|")
+        L.append("| П | Ресурс | Тип | Участников | Последний пост | Зачем нам |")
+        L.append("|---|---|---|---:|---|---|")
         for r in items:
             name = (r["title"] or r["handle"]).replace("|", "/")[:60]
-            L.append(f'| [{name}]({r["url"]}) `@{r["handle"]}` | {r["kind"] or "?"} | '
+            L.append(f'| {r["band"]} | [{name}]({r["url"]}) `@{r["handle"]}` | {r["kind"] or "?"} | '
                      f'{r["size"] or "—"} | {r["last_post_date"] or "—"} | {r["why"][:150]} |')
+if folders:
+    L.append(f"\n## Папки-подборки t.me/addlist ({len(folders)})\n")
+    L.append("Каждая ссылка добавляет в Telegram сразу пачку чатов. Число участников у папок не показывается — "
+             "это ограничение самих страниц addlist, а не пропуск в данных.\n")
+    L.append("| Папка | Сегмент | Зачем нам |")
+    L.append("|---|---|---|")
+    for r in folders:
+        L.append(f'| [{(r["title"] or r["handle"]).replace("|","/")[:50]}]({r["url"]}) | {r["segment"]} | {r["why"][:130]} |')
+
 if dead:
     L.append(f"\n## Не подтвердились ({len(dead)})\n")
     L.append("Публичной страницы нет: закрыт, переименован или удалён. Оставлены для истории, в работу не берём.\n")
