@@ -78,6 +78,9 @@ def band(r):
 
 for r in rows:
     r["band"] = band(r) if str(r["status"]).startswith("LIVE") else ""
+    # В канал написать нельзя — он годится как источник заказов и наблюдение,
+    # но не как площадка для касания. Группа — единственное место, где идёт диалог.
+    r["touch"] = {"GROUP": "диалог", "CHANNEL": "только чтение"}.get(r["kind"], "?")
 
 folders = [r for r in rows if r["handle"].startswith("addlist/")]
 live = [r for r in rows if str(r["status"]).startswith("LIVE") and not r["handle"].startswith("addlist/")]
@@ -86,7 +89,7 @@ BAND_ORDER = {"A": 0, "B": 1, "C": 2, "": 3}
 live.sort(key=lambda r: (r["segment"], r["use_case"], BAND_ORDER[r["band"]],
                          -(r["size"] if isinstance(r["size"], int) else 0)))
 
-fields = ["handle","url","title","kind","size","status","band","segment","subsegment","use_case",
+fields = ["handle","url","title","kind","touch","size","status","band","segment","subsegment","use_case",
           "last_post_date","posts_30d","confidence","why","source"]
 with open(out_csv, "w", newline="", encoding="utf-8") as fh:
     w = csv.DictWriter(fh, fieldnames=fields)
@@ -100,10 +103,12 @@ for r in live:
 
 L = []
 L.append("# Каталог Telegram-сообществ\n")
-L.append(f"Всего проверено ссылок: **{len(rows)}**. Живых на момент проверки: **{len(live)}**, "
-         f"мёртвых или приватных: **{len(dead)}**.\n")
+L.append(f"Всего собрано и проверено ссылок: **{len(rows)}**. Из них живых чатов и каналов: **{len(live)}**, "
+         f"папок-подборок addlist: **{len(folders)}**, мёртвых или приватных: **{len(dead)}**.\n")
 L.append("Числа участников и даты постов сняты с публичных страниц t.me скриптом `tools/verify_tg.sh` / `tools/enrich_tg.py`. "
          "У групп публичной ленты нет, поэтому `последний пост` заполнен только у каналов.\n")
+L.append("**Колонка «можно писать»** отделяет группы от каналов: в канал участник писать не может, поэтому канал — "
+         "это источник заказов и наблюдение, но не площадка для касания. Для продажи пилота берите только группы.\n")
 L.append("**Полоса A/B/C здесь — прокси по публичным метаданным** (размер, свежесть постов), а не `ORDER_SCORE`/`PILOT_SCORE` "
          "из `playbook/scoring.md`: настоящие сигналы спроса и боли видны только внутри чата, после вступления. "
          "C у канала означает «ни одного поста за 30 дней», C у группы — меньше 200 участников.\n")
@@ -116,11 +121,11 @@ for seg in ["it_orders", "infobiz", "leadgen", "business"]:
         if not items:
             continue
         L.append(f"\n### {USE_TITLE.get(use, use)} ({len(items)})\n")
-        L.append("| П | Ресурс | Тип | Участников | Последний пост | Зачем нам |")
+        L.append("| П | Ресурс | Можно писать | Участников | Последний пост | Зачем нам |")
         L.append("|---|---|---|---:|---|---|")
         for r in items:
             name = (r["title"] or r["handle"]).replace("|", "/")[:60]
-            L.append(f'| {r["band"]} | [{name}]({r["url"]}) `@{r["handle"]}` | {r["kind"] or "?"} | '
+            L.append(f'| {r["band"]} | [{name}]({r["url"]}) `@{r["handle"]}` | {r["touch"]} | '
                      f'{r["size"] or "—"} | {r["last_post_date"] or "—"} | {r["why"][:150]} |')
 if folders:
     L.append(f"\n## Папки-подборки t.me/addlist ({len(folders)})\n")
