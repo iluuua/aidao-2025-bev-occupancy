@@ -19,7 +19,10 @@ one and a long-focus one) and two facing sideways. From a single frame of all fo
 100 m across, roughly 0.8 m per cell.
 
 Labels are three-valued: free, occupied, and **unknown**. Unknown cells carry no penalty, and both
-the metric and the loss mask them out. The score is a mean IoU over the two real classes.
+the metric and the loss mask them out. The organizers scored submissions with the standard
+`IoU = TP / (TP + FP + FN)`. This solution additionally tracks a mean IoU over both classes
+locally, and trains against a differentiable surrogate of it, which was a choice made during the
+contest rather than part of the stated metric. See [`references/`](references/) for the brief.
 
 Every frame ships with the calibration of all four cameras, an intrinsics matrix and a `car_to_cam`
 transform.
@@ -170,6 +173,7 @@ pointing at images, `.npy` calibration files and occupancy grids. Data paths liv
 ```
 notebooks/lss_bev_occupancy.ipynb   the whole solution: dataset, geometry, model, training, submission
 results/training_log.txt            stdout of the final contest run
+references/README.md                the task as specified, and the architectures it pointed at
 requirements.txt
 ```
 
